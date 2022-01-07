@@ -1,39 +1,33 @@
 import asyncio
 
-counter = 0
-locker = asyncio.Lock()
 
+class Resource:
+    def __init__(self):
+        self._users_count = 0
 
-# TODO используя Lock не допустить длительного сна
-# убирать sleep() или изменять время сна нельзя
-async def worker():
-    global counter
-    await asyncio.sleep(0.1)
-    async with locker:
-        counter += 1
-        print(counter)
-        if counter > 1:
+    async def use(self):
+        self._users_count += 1
+
+        if self._users_count > 1:
             await asyncio.sleep(5)
         else:
-            await asyncio.sleep(0.1) 
-        counter -= 1
+            await asyncio.sleep(0.1)
+
+        self._users_count -= 1
 
 
-res = "Успех"
+async def worker(res: Resource, lock: asyncio.Lock):
+    """
+    Используя lock, гарантировать, что несколько  worker-ов не будут использовать единовременно ресурс
+    """
+    async with lock:
+        await res.use()
 
 
 async def main():
-    global res
-
-    try:
-        await asyncio.wait_for(
-            asyncio.wait([worker(), worker(), worker(), worker()]), timeout=1
-        )
-    except asyncio.TimeoutError:
-        res = "Долгое время выполнения!"
+    lock = asyncio.Lock()
+    res = Resource()
+    await asyncio.gather(*[worker(res, lock) for _ in range(10)])
 
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(main())
-
-print(res)
+asyncio.run(main())

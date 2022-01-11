@@ -9,24 +9,29 @@ class Resource:
 
 
 async def set_event(event: Event):
-    await asyncio.sleep(1)
-    event.set()
+    try:
+        await asyncio.sleep(1)
+        event.set()
 
-    while True:
-        await asyncio.sleep(10)
+        while True:
+            await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        print('cancelled')
 
 
 async def worker(r: Resource):
-    await asyncio.sleep(0.5)
-    r.val += 1
+    try:
+        await asyncio.sleep(0.5)
+        r.val += 1
 
-    while True:
-        await asyncio.sleep(10)
+        while True:
+            await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        print('cancelled')
 
 
 async def do_until_event(coros: list[typing.Coroutine], event: asyncio.Event):
     """Функция должна обрабатывать Task|Coroutine|Future объекты до тех пор, пока не будет вызван метод Event.set() """
-    loop = asyncio.get_event_loop()
     tasks = []
     for coro in coros:
         tasks.append(asyncio.create_task(coro))
@@ -34,6 +39,8 @@ async def do_until_event(coros: list[typing.Coroutine], event: asyncio.Event):
 
     for task in tasks:
         task.cancel()
+
+    await asyncio.gather(*tasks)
 
 
 async def main():

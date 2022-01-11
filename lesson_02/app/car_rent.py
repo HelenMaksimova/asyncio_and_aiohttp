@@ -18,6 +18,7 @@ class PipelineContext:
 
 CURRENT_AGG_REQUESTS_COUNT = 0
 BOOKED_CARS: Dict[int, Set[str]] = defaultdict(set)
+IS_RUNNING = False
 
 
 async def get_offers(source: str) -> list[dict]:
@@ -61,7 +62,6 @@ async def get_offers_from_sourses(sources: list[str]) -> list[dict]:
     return out
 
 
-# TODO реализовать звено агрегации предложений о бронировании каршерингов
 async def chain_combine_service_offers(inbound: Queue[PipelineContext], outbound: Queue[PipelineContext], **kw):
     """
     Запускает N функций worker-ов для обработки данных из очереди inbound и передачи результата в outbound очередь.
@@ -73,42 +73,30 @@ async def chain_combine_service_offers(inbound: Queue[PipelineContext], outbound
 
     Keyword arguments:
     inbound: Queue[PipelineContext] - очередь данных для обработки
-    Пример элемента PipelineContext из inbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-           "yandex.ru",
-           "delimobil.ru",
-           "belkacar.ru",
-        ]
-    )
-
-    outbound: Queue[PipelineContext] - очередь для передачи обработанных данных
-    Пример элемента PipelineContext в outbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-            {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"},
-            {"url": "http://yandex.ru/car?id=2", "price": 5_000, "brand": "MITSUBISHI"},
-            {"url": "http://yandex.ru/car?id=3", "price": 3_000, "brand": "KIA"},
-            {"url": "http://yandex.ru/car?id=4", "price": 2_000, "brand": "DAEWOO"},
-            {"url": "http://yandex.ru/car?id=5", "price": 10_000, "brand": "PORSCHE"},
-    ]
-    )
     """
     sem = asyncio.Semaphore(MAX_PARALLEL_AGG_REQUESTS_COUNT)
-    await asyncio.gather(*[get_offers_worker(sem, inbound, outbound) for _ in range(WORKERS_COUNT)])
+    tasks = [asyncio.Task(get_offers_worker(sem, inbound, outbound)) for _ in range(WORKERS_COUNT)]
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        print('chain_combine_service_offers cancelled')
 
 
 async def get_offers_worker(sem: asyncio.Semaphore, inbound: Queue[PipelineContext], outbound: Queue[PipelineContext]):
-    while True:
-        item = await inbound.get()
-        async with sem:
-            item.data = await get_offers_from_sourses(item.data)
-        await outbound.put(item)
+    """Функция-воркер для обработки элементов из очереди при опросе сервисов"""
+    try:
+        while IS_RUNNING:
+            item = await inbound.get()
+            async with sem:
+                item.data = await get_offers_from_sourses(item.data)
+            await outbound.put(item)
+    except asyncio.CancelledError:
+        print('get_offers_worker canceled')
 
 
-# TODO реализовать звено фильтрации предложений о бронировании каршерингов
 async def chain_filter_offers(
         inbound: Queue,
         outbound: Queue,
@@ -125,37 +113,16 @@ async def chain_filter_offers(
     price: Optional[int] - максимальная стоимость предложения. Условие price >= offer["price"]
 
     inbound: Queue[PipelineContext] - очередь данных для обработки
-    Пример элемента PipelineContext из inbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-            {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"},
-            {"url": "http://yandex.ru/car?id=2", "price": 5_000, "brand": "MITSUBISHI"},
-            {"url": "http://yandex.ru/car?id=3", "price": 3_000, "brand": "KIA"},
-            {"url": "http://yandex.ru/car?id=4", "price": 2_000, "brand": "DAEWOO"},
-            {"url": "http://yandex.ru/car?id=5", "price": 10_000, "brand": "PORSCHE"},
-    ]
-    )
-
-    outbound: Queue[PipelineContext] - очередь для передачи обработанных данных
-    Пример элемента PipelineContext в outbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-            {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"},
-            {"url": "http://yandex.ru/car?id=2", "price": 5_000, "brand": "MITSUBISHI"},
-            {"url": "http://yandex.ru/car?id=3", "price": 3_000, "brand": "KIA"},
-            {"url": "http://yandex.ru/car?id=4", "price": 2_000, "brand": "DAEWOO"},
-            {"url": "http://yandex.ru/car?id=5", "price": 10_000, "brand": "PORSCHE"},
-    ]
-    )
     """
-    while True:
-        item = await inbound.get()
-        item.data = [element for element in item.data if
-                     (not brand or element.get('brand') == brand)
-                     and (not price or element.get('price') <= price)]
-        await outbound.put(item)
+    try:
+        while IS_RUNNING:
+            item = await inbound.get()
+            item.data = [element for element in item.data if
+                         (not brand or element.get('brand') == brand)
+                         and (not price or element.get('price') <= price)]
+            await outbound.put(item)
+    except asyncio.CancelledError:
+        print('chain_filter_offers cancelled')
 
 
 async def cancel_book_request(user_id: int, offer: dict):
@@ -164,9 +131,9 @@ async def cancel_book_request(user_id: int, offer: dict):
     """
     await asyncio.sleep(1)
     BOOKED_CARS[user_id].remove(offer.get("url"))
+    print('book_request cancelled')
 
 
-# TODO отловить исколючение asyncio.CancelledError и вызвать cancel_book_request в этом случае
 async def book_request(user_id: int, offer: dict, event: Event) -> dict:
     """
     Эмулирует запрос бронирования авто. В случае отмены вызывает cancel_book_request.
@@ -183,7 +150,6 @@ async def book_request(user_id: int, offer: dict, event: Event) -> dict:
         await cancel_book_request(user_id, offer)
 
 
-# TODO реализовать звено бронирования автомобиля
 async def chain_book_car(inbound: Queue[PipelineContext], outbound: Queue[PipelineContext], **kw):
     """
     Запускает N функций worker-ов для обработки данных из очереди inbound и передачи результата в outbound очередь.
@@ -193,46 +159,53 @@ async def chain_book_car(inbound: Queue[PipelineContext], outbound: Queue[Pipeli
 
     Keyword arguments:
     inbound: Queue[PipelineContext] - очередь данных для обработки
-    Пример элемента PipelineContext из inbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-            {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"},
-            {"url": "http://yandex.ru/car?id=2", "price": 5_000, "brand": "MITSUBISHI"},
-            {"url": "http://yandex.ru/car?id=3", "price": 3_000, "brand": "KIA"},
-            {"url": "http://yandex.ru/car?id=4", "price": 2_000, "brand": "DAEWOO"},
-            {"url": "http://yandex.ru/car?id=5", "price": 10_000, "brand": "PORSCHE"},
-    ]
-    )
-
-    outbound: Queue[PipelineContext] - очередь для передачи обработанных данных
-    Пример элемента PipelineContext в outbound:
-    PipelineContext(
-        user_id = 1,
-        data = {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"}
-    )
     """
-    await asyncio.gather(*[book_car_worker(inbound, outbound) for _ in range(WORKERS_COUNT)])
+    tasks = [asyncio.Task(book_car_worker(inbound, outbound)) for _ in range(WORKERS_COUNT)]
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        print('chain_book_car cancelled')
 
 
 async def book_car_worker(inbound: Queue[PipelineContext], outbound: Queue[PipelineContext]):
-    event = Event()
+    """Функция-воркер для обработки элементов из очереди при бронировании машины"""
+    tasks = list()
+    try:
+        while IS_RUNNING:
+            event = Event()
+            event.set()
+            item = await inbound.get()
+            tasks = [asyncio.Task(book_request(item.user_id, element, event)) for element in item.data]
+            result, pending = await asyncio.wait(
+                tasks,
+                return_when='FIRST_COMPLETED')
+            item.data = result.pop().result()
+
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending)
+
+            await outbound.put(item)
+
+    except asyncio.CancelledError:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks)
+        print('book_car_worker cancelled')
+
+
+async def stop_program(event: Event):
+    await asyncio.sleep(5)
+    global IS_RUNNING
+    IS_RUNNING = False
     event.set()
-    while True:
-        item = await inbound.get()
-        result, pending = await asyncio.wait(
-            [book_request(item.user_id, element, event) for element in item.data],
-            return_when='FIRST_COMPLETED')
-        item.data = result.pop().result()
-
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending)
-
-        await outbound.put(item)
+    print('IS_RUNNING', IS_RUNNING)
 
 
-# TODO запустить цепочку работы звеньев и обмены данными между ними
 def run_pipeline(inbound: Queue[PipelineContext]) -> Queue[PipelineContext]:
     """
     Необходимо создать asyncio.Task для функций:
@@ -247,30 +220,35 @@ def run_pipeline(inbound: Queue[PipelineContext]) -> Queue[PipelineContext]:
 
     Keyword arguments:
     inbound: Queue[PipelineContext] - очередь данных для обработки
-    Пример элемента PipelineContext из inbound:
-    PipelineContext(
-        user_id = 1,
-        data = [
-           "yandex.ru",
-           "delimobil.ru",
-           "belkacar.ru",
-        ]
-    )
-
-    -> Queue[PipelineContext] - очередь для передачи обработанных данных
-    Пример элемента PipelineContext из возвращаемой очереди:
-    PipelineContext(
-        user_id = 1,
-        data = {"url": "http://yandex.ru/car?id=1", "price": 1_000, "brand": "LADA"}
-    )
     """
-
+    global IS_RUNNING
+    IS_RUNNING = True
     data_queue = Queue()
     filtred_queue = Queue()
     outbound = Queue()
 
-    asyncio.create_task(chain_combine_service_offers(inbound, data_queue))
-    asyncio.create_task(chain_filter_offers(data_queue, filtred_queue))
-    asyncio.create_task(chain_book_car(filtred_queue, outbound))
+    asyncio.create_task(chain_combine_service_offers(inbound, data_queue), name='offers')
+    asyncio.create_task(chain_filter_offers(data_queue, filtred_queue), name='filters')
+    asyncio.create_task(chain_book_car(filtred_queue, outbound), name='book_cars')
 
     return outbound
+
+
+async def main():
+    start_queue = Queue()
+    event = Event()
+
+    for num in range(1, 11):
+        start_queue.put_nowait(PipelineContext(num, ['some1', 'some2', 'some3]']))
+
+    asyncio.create_task(stop_program(event), name='stop_program')
+    outbound = run_pipeline(start_queue)
+
+    await event.wait()
+
+    while not outbound.empty():
+        item = outbound.get_nowait()
+        print(item.user_id, item.data)
+
+
+asyncio.run(main())

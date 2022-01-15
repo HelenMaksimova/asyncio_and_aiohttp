@@ -4,12 +4,13 @@ import os
 from dotenv import load_dotenv
 
 from clients.fapi.s3 import S3Client
-from clients.ws.bitmex import fetch_10
+from clients.lms.api import LmsClient
 
 
 async def cli():
-    res = await fetch_10()
-    print(res)
+    async with LmsClient(os.getenv("BOT_TOKEN")) as tg_cli:
+        res = await tg_cli.login('alnorda@gmail.com', '12Forve12')
+        print(res)
 
 
 async def s3():

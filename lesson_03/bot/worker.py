@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List
 
 from clients.fapi.s3 import S3Client
-from clients.tg.api import TgClient
+from clients.fapi.tg import TgClientWithFile
 from clients.tg.dcs import UpdateObj
 
 
@@ -31,6 +31,7 @@ class Worker:
         )
         self.is_running = False
         self.config = config
+        self.client = TgClientWithFile
 
     async def handle_update(self, upd: UpdateObj):
         """
@@ -40,13 +41,24 @@ class Worker:
         chat_id = upd.message.chat.id
         print(upd)
         if upd.message.text == '/start':
-            message = '[greetings]'
+            await self._send_message(chat_id, '[greeting]')
         elif upd.message.document:
-            message = '[document]'
+            await self._send_message(chat_id, '[document]')
+            await self._upload_file(upd)
+            await self._send_message(chat_id, '[document has been saved]')
         else:
-            message = '[document is required]'
-        async with TgClient(self.token) as client:
+            await self._send_message(chat_id, '[document is required]')
+
+    async def _send_message(self, chat_id: int, message: str):
+        async with TgClientWithFile(self.token) as client:
             await client.send_message(chat_id, message)
+
+    async def _upload_file(self, upd: UpdateObj):
+        file_id = upd.message.document.file_id
+        file_name = upd.message.document.file_name
+        url = f'{self.client.BASE_PATH}/file/bot{self.token}/{file_id}'
+        async with self.s3:
+            await self.s3.fetch_and_upload(self.config.bucket, file_name, url)
 
     async def _worker(self):
         """
@@ -57,7 +69,7 @@ class Worker:
                 item = await self.queue.get()
                 await self.handle_update(item)
         except asyncio.CancelledError:
-            pass
+            print('ups')
 
     def start(self):
         """
@@ -71,8 +83,8 @@ class Worker:
         """
         нужно дождаться пока очередь не станет пустой (метод join у очереди), а потом отменить все воркеры
         """
-        await self.queue.join()
         self.is_running = False
+        await self.queue.join()
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks)

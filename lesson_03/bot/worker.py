@@ -32,6 +32,7 @@ class Worker:
         self.is_running = False
         self.config = config
         self.client = TgClientWithFile
+        self.first_message = False
 
     async def handle_update(self, upd: UpdateObj):
         """
@@ -39,9 +40,9 @@ class Worker:
         бизнес-логика бота тестируется с помощью этого метода, файл с тестами tests.bot.test_worker::TestHandler
         """
         chat_id = upd.message.chat.id
-        print(upd)
-        if upd.message.text == '/start':
+        if upd.message.text == '/start' and not self.first_message:
             await self._send_message(chat_id, '[greeting]')
+            self.first_message = True
         elif upd.message.document:
             await self._send_message(chat_id, '[document]')
             await self._upload_file(upd)

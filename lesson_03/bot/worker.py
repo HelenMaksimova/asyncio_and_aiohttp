@@ -71,7 +71,7 @@ class Worker:
                 await self.handle_update(item)
                 self.queue.task_done()
         except asyncio.CancelledError:
-            print('ups')
+            raise
 
     def start(self):
         """
@@ -89,4 +89,7 @@ class Worker:
         self.is_running = False
         for task in self._tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks)
+        try:
+            await asyncio.gather(*self._tasks)
+        except asyncio.CancelledError:
+            print('CANCELLED')

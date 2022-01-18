@@ -54,6 +54,7 @@ class Poller:
             if update_data:
                 for item in update_data:
                     await self.queue.put(item)
+            raise
 
     def start(self):
         """
@@ -68,20 +69,7 @@ class Poller:
         """
         self.is_running = False
         self._task.cancel()
-        await self._task
-
-
-if __name__ == '__main__':
-    load_dotenv()
-
-    start_queue = asyncio.Queue()
-    poller = Poller(getenv('BOT_TOKEN'), start_queue)
-
-
-    async def main():
-        poller.start()
-        await asyncio.sleep(10)
-        await poller.stop()
-
-
-    asyncio.run(main())
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            print('CANCELLED')

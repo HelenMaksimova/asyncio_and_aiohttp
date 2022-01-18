@@ -69,6 +69,7 @@ class Worker:
             while self.is_running:
                 item = await self.queue.get()
                 await self.handle_update(item)
+                self.queue.task_done()
         except asyncio.CancelledError:
             print('ups')
 
@@ -84,8 +85,8 @@ class Worker:
         """
         нужно дождаться пока очередь не станет пустой (метод join у очереди), а потом отменить все воркеры
         """
-        self.is_running = False
         await self.queue.join()
+        self.is_running = False
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks)

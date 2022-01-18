@@ -1,5 +1,8 @@
 import asyncio
 from typing import Optional
+from os import getenv
+
+from dotenv import load_dotenv
 
 from clients.tg.api import TgClient
 
@@ -65,13 +68,14 @@ class Poller:
         """
         self.is_running = False
         self._task.cancel()
-        await asyncio.gather(self._task)
+        await self._task
 
 
 if __name__ == '__main__':
+    load_dotenv()
 
     start_queue = asyncio.Queue()
-    poller = Poller('', start_queue)
+    poller = Poller(getenv('BOT_TOKEN'), start_queue)
 
 
     async def main():

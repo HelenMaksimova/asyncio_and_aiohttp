@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List
 
 from clients.fapi.s3 import S3Client
+from clients.tg.api import TgClient
 from clients.tg.dcs import UpdateObj
 
 
@@ -28,28 +29,50 @@ class Worker:
             aws_secret_access_key=config.aws_secret_access_key,
             aws_access_key_id=config.aws_access_key_id
         )
+        self.is_running = False
+        self.config = config
 
     async def handle_update(self, upd: UpdateObj):
         """
         в этом методе должна происходить обработка сообщений и реализация бизнес-логики
         бизнес-логика бота тестируется с помощью этого метода, файл с тестами tests.bot.test_worker::TestHandler
         """
-        raise NotImplementedError
+        chat_id = upd.message.chat.id
+        print(upd)
+        if upd.message.text == '/start':
+            message = '[greetings]'
+        elif upd.message.document:
+            message = '[document]'
+        else:
+            message = '[document is required]'
+        async with TgClient(self.token) as client:
+            await client.send_message(chat_id, message)
 
     async def _worker(self):
         """
         должен получать сообщения из очереди и вызывать handle_update
         """
-        raise NotImplementedError
+        try:
+            while self.is_running:
+                item = await self.queue.get()
+                await self.handle_update(item)
+        except asyncio.CancelledError:
+            pass
 
     def start(self):
         """
         должен запустить столько воркеров, сколько указано в config.concurrent_workers
         запущенные задачи нужно положить в _tasks
         """
+        self.is_running = True
+        self._tasks.extend([asyncio.create_task(self._worker()) for _ in range(self.config.concurrent_workers)])
 
     async def stop(self):
         """
         нужно дождаться пока очередь не станет пустой (метод join у очереди), а потом отменить все воркеры
         """
-        raise NotImplementedError
+        await self.queue.join()
+        self.is_running = False
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks)

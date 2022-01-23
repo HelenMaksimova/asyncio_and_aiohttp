@@ -2,3 +2,5 @@ asyncio_venv
 .idea
 __pycache__/
 /marshmallow_tries/
+/mongo_tries/
+/rabbitmq_tries/

@@ -1,3 +1,6 @@
 requests==2.26.0
 pytest==6.2.5
 marshmallow==3.14.1
+aiohttp==3.8.1
+aiobotocore==2.1.0
+python-dotenv==0.19.2
